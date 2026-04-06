@@ -1,6 +1,6 @@
 #include <Arduino.h>
 #include <Wire.h>
-#include <LiquidCrystal.h>
+#include <LiquidCrystal_PCF8574.h>
 
 /*
   Project: Control panel firmware for Glassboard Prototype Silicone
@@ -10,63 +10,28 @@
                into prototype molds.
   Microcontroller: Raspberry Pi Pico RP2040
   Author: Quinlan Walinder
-  Version: 0.1
+  Version: 0.2
   Version Notes:
-    - V0.1: 
+    - V0.1: Features implemented include automatic mixing and manual injection
+    - V0.2: 
 */
+
+#include "pins.h"       // All pin numbers
+#include "config.h"     // Timing, addresses
+#include "types.h"      // Enums, structs, etc.
+
 
 // Define Status Register:
 volatile uint8_t statusRegister = 0;
-#define FLAG_MIXING_MOTOR_ENABLED    0b00000001 // Position 1: Mixing Motor Status
-#define FLAG_INJECTION_MOTOR_ENABLED 0b00000010 // Position 2: Injection Motor Status
-#define FLAG_MANUAL_INJECTION        0b00000100 // Position 3: Manual Injection Mode
-
-
-
-// Microcontroller Parameters
-#define ADC_MAX 1023
-#define ADC_MIN 0
-
-// Injection Motor Speed Limit (between 0-255)
-#define INJECTMOTOR_PWMLIMIT 100
-
-// Pin Declarations for speed input using joystick:
-#define PIN_JOYSTICK A0 // Must be analog input
-
-// Pin Declarations for DC Motor Control:
-#define PIN_MIXMOTOR_PWM 7
-#define PIN_MIXMOTOR_FWD 6
-#define PIN_MIXMOTOR_BKWD 5
-#define PIN_INJECTMOTOR_PWM 4
-#define PIN_INJECTMOTOR_FWD 3
-#define PIN_INJECTMOTOR_BKWD 2
-
-// Pin Declarations for Input Buttons
-#define PIN_SWITCH_MODESELECT 13
-#define PIN_BUTTON_AUTOINJECT 12
-#define PIN_BUTTON_AUTOMIX 11
-
-// Pin Declarations for Thermistor Reading:
-#define PIN_THERMISTOR 000 // Must be analog input
-
-// Pin Declarations for Status LCD 
-#define LCD_D4 18
-#define LCD_D5 19
-#define LCD_D6 20
-#define LCD_D7 21
-#define LCD_RS 16
-#define LCD_EN 17
 
 // Initialize Status LCD
-LiquidCrystal lcd(LCD_RS, LCD_EN, LCD_D4, LCD_D5, LCD_D6, LCD_D7);
+LiquidCrystal_PCF8574 lcd(ADDR_1602LCD_I2C);
 
 // Variable Definitions for Manual Injection Mode
 uint16_t joystickReading;
 int pwmNoiseThreshold = 5; // Ignore speed values below this to account for noise in the joystick when manually injecting
 
 // Variable Definitions for Automatic Mixing Mode
-#define AUTOMIX_TIMER_STEPS 1000
-#define PIN_MIX_SPEED_POTENTIOMETER A1
 uint8_t mixSpeedSetVal; // PWM value for maximum mixing motor speed
 uint8_t mixSpeed = 1; // PWM value for mixing motor speed - changed within autoMix();
 volatile int autoMixTimer = 0;
@@ -81,11 +46,17 @@ void driveMotor(int speed, int direction, int motor);
 void disableMotor(int motor);
 void joystickDrivenInjection();
 void updateLCD();
+void ISR_AutoMix();
+void ISR_LowerLimitSwitch();
 
 
 void setup() {
 
   // Start Initialization Screen on LCD
+  Wire.setSDA(0);
+  Wire.setSCL(1);
+  Wire.begin();
+  Wire.beginTransmission(ADDR_1602LCD_I2C);
   lcd.begin(16, 2);
   lcd.print("  Initializing....  ");
 
@@ -110,8 +81,13 @@ void setup() {
 
   // Set pin mode for control panel inputs
   pinMode(PIN_SWITCH_MODESELECT, INPUT_PULLUP);
-  pinMode(PIN_BUTTON_AUTOINJECT, INPUT_PULLUP);
   pinMode(PIN_BUTTON_AUTOMIX, INPUT_PULLUP);
+
+  // Set up pin mode and ISR for interrupt pins
+  pinMode(PIN_BUTTON_AUTOINJECT, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(PIN_BUTTON_AUTOINJECT), ISR_AutoMix, FALLING);
+  pinMode(PIN_LIMIT_SWITCH_LINEAR_STAGE, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(PIN_LIMIT_SWITCH_LINEAR_STAGE), ISR_LowerLimitSwitch, FALLING);
 
   // Clear LCD Screen
   delay(500);
