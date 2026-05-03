@@ -16,13 +16,12 @@
     - V0.2: 
 */
 
-#include "pins.h"       // All pin numbers
-#include "config.h"     // Timing, addresses
-#include "types.h"      // Enums, structs, etc.
-
-
-// Define Status Register:
-volatile uint8_t statusRegister = 0;
+#include "pins.h"            // Definitions for all I/O Pins
+#include "config.h"          // Timing, addresses, function configurations, etc.
+#include "types.h"           // Enums, structs, etc.
+#include "dcactuators.h"     // Functions for driving DC linear actuators
+#include "stepper_control.h" // Functions for driving stepper motor
+#include "cooling.h"         // Functions for controlling cooling fan
 
 // Initialize Status LCD
 LiquidCrystal_PCF8574 lcd(ADDR_1602LCD_I2C);
@@ -37,27 +36,31 @@ uint8_t mixSpeed = 1; // PWM value for mixing motor speed - changed within autoM
 volatile int autoMixTimer = 0;
 int mixDir = 1;
 
+// Define Status Register:
+volatile uint8_t statusRegister = 0;
 
 // Function Declarations:
 void checkStatus();
 void setMixSpeed();
 void autoMix();
-void driveMotor(int speed, int direction, int motor);
-void disableMotor(int motor);
 void joystickDrivenInjection();
 void updateLCD();
-void ISR_AutoMix();
-void ISR_LowerLimitSwitch();
+void printDebugSummary();
+// void ISR_AutoMix();
+// void ISR_LowerLimitSwitch();
 
 
 void setup() {
+  // Set up Analog-Digital converter correctly
+  analogReadResolution(12); // sets range to 0-4095
 
   // Start Initialization Screen on LCD
   Wire.setSDA(0);
   Wire.setSCL(1);
   Wire.begin();
   Wire.beginTransmission(ADDR_1602LCD_I2C);
-  lcd.begin(16, 2);
+  lcd.begin(STATUS_LCD_COLUMNS, STATUS_LCD_ROWS);
+  lcd.setBacklight(1);
   lcd.print("  Initializing....  ");
 
   // Set input/output mode for motor driver pins:
@@ -82,16 +85,20 @@ void setup() {
   // Set pin mode for control panel inputs
   pinMode(PIN_SWITCH_MODESELECT, INPUT_PULLUP);
   pinMode(PIN_BUTTON_AUTOMIX, INPUT_PULLUP);
-
-  // Set up pin mode and ISR for interrupt pins
   pinMode(PIN_BUTTON_AUTOINJECT, INPUT_PULLUP);
-  attachInterrupt(digitalPinToInterrupt(PIN_BUTTON_AUTOINJECT), ISR_AutoMix, FALLING);
-  pinMode(PIN_LIMIT_SWITCH_LINEAR_STAGE, INPUT_PULLUP);
-  attachInterrupt(digitalPinToInterrupt(PIN_LIMIT_SWITCH_LINEAR_STAGE), ISR_LowerLimitSwitch, FALLING);
+
+  // // Set up pin mode and ISR for interrupt pins
+  // pinMode(PIN_BUTTON_AUTOINJECT, INPUT_PULLUP);
+  // attachInterrupt(digitalPinToInterrupt(PIN_BUTTON_AUTOINJECT), ISR_AutoMix, FALLING);
+  // pinMode(PIN_LIMIT_SWITCH_LINEAR_STAGE, INPUT_PULLUP);
+  // attachInterrupt(digitalPinToInterrupt(PIN_LIMIT_SWITCH_LINEAR_STAGE), ISR_LowerLimitSwitch, FALLING);
 
   // Clear LCD Screen
   delay(500);
   lcd.clear();
+
+  // Open serial port if debugging:
+  DBG_BEGIN;
    
 }
 
@@ -119,6 +126,8 @@ void loop() {
   updateLCD();
 
   delay(10);
+
+  // DBG_PRINT_SUMMARY;
 }
 
 
@@ -139,14 +148,22 @@ void checkStatus() {
   if(statusRegister & FLAG_MANUAL_INJECTION) {
     joystickDrivenInjection();
   } 
+  if(statusRegister & FLAG_INJECTION_MOTOR_ENABLED) {
+    setCoolingLevel(2);
+  }
   if(statusRegister & FLAG_MIXING_MOTOR_ENABLED) {
     autoMix();
+    setCoolingLevel(2);
   } else if(autoMixTimer != 0 || mixSpeed != 1) {
     autoMixTimer = 0;
     mixSpeed = 1;
     disableMotor(1);
   } else {
     setMixSpeed();
+  }
+
+  if(!(statusRegister & FLAG_INJECTION_MOTOR_ENABLED) && !(statusRegister & FLAG_MIXING_MOTOR_ENABLED)) {
+    setCoolingLevel(1);
   }
 }
 
@@ -164,63 +181,6 @@ void setMixSpeed() {
 
   mixSpeedSetVal = map(ADCVal, ADC_MIN, ADC_MAX, 0, 255);
 
-}
-
-/*
-  Function disableMotor:
-  Description: Disables a given motor (1 - Mixing Motor, 2 - Injection Motor)
-  Inputs:
-    int motor - indicates which motor to disable (motor==1 -> Mixing Motor, motor==2 -> Injection Motor)
-  Outputs:
-    none
-*/ 
-void disableMotor(int motor) {
-
-  if(motor == 1) {
-    analogWrite(PIN_MIXMOTOR_PWM, 0);
-    digitalWrite(PIN_MIXMOTOR_FWD, LOW);
-    digitalWrite(PIN_MIXMOTOR_BKWD, LOW);
-    statusRegister &= ~FLAG_MIXING_MOTOR_ENABLED;
-  } else if (motor == 2) {
-    analogWrite(PIN_INJECTMOTOR_PWM, 0);
-    digitalWrite(PIN_INJECTMOTOR_FWD, LOW);
-    digitalWrite(PIN_INJECTMOTOR_BKWD, LOW);
-    statusRegister &= ~FLAG_INJECTION_MOTOR_ENABLED;
-  }
-  
-}
-
-/*
-  Function driveMotor:
-  Description: Drive a given motor based on a PWN value and direction
-  Inputs:
-    int speed - integer value (Between 0 - 255) for PWM signal to motor driver
-    int direction - indicates motor direction (1 for forwards, 0 for backwards)
-    int motor - indicates which motor to drive (motor==1 -> Mixing Motor, motor==2 -> Injection Motor)
-  Outputs:
-    none
-*/
-void driveMotor(int speed, int direction, int motor){
-
-
-  if(motor == 1) {
-    statusRegister |= FLAG_MIXING_MOTOR_ENABLED;
-    statusRegister &= ~FLAG_INJECTION_MOTOR_ENABLED;
-    digitalWrite(PIN_MIXMOTOR_FWD, direction);
-    digitalWrite(PIN_MIXMOTOR_BKWD, !direction);
-    analogWrite(PIN_MIXMOTOR_PWM, speed);
-    disableMotor(2); // Disables "Motor 2" - Injection motor
-  } else if(motor == 2) {
-    statusRegister |= FLAG_INJECTION_MOTOR_ENABLED;
-    statusRegister &= ~FLAG_MIXING_MOTOR_ENABLED;
-    digitalWrite(PIN_INJECTMOTOR_FWD, direction);
-    digitalWrite(PIN_INJECTMOTOR_BKWD, !direction);
-    analogWrite(PIN_INJECTMOTOR_PWM, speed);
-    disableMotor(1); // Disables "Motor 1" - Mixing motor
-  } else {
-    disableMotor(1); // Disables "Motor 1" - Mixing motor
-    disableMotor(2); // Disables "Motor 2" - Injection motor
-  }
 }
 
 /*
@@ -316,4 +276,28 @@ void updateLCD() {
   lcd.print("-SPD:");
   lcd.print(mixSpeedSetVal);
   lcd.print(" ");
+}
+
+void printDebugSummary() {
+  // Print status of "Mode" switch
+  DBG_PRINT("Mode Switch Status: ");
+  DBG_PRINTLN(digitalRead(PIN_SWITCH_MODESELECT));
+
+  // Print status of "Auto Inject" button
+  DBG_PRINT("Auto Inject Button Status: ");
+  DBG_PRINTLN(digitalRead(PIN_BUTTON_AUTOINJECT));
+  
+  // Print status of "Auto Mix" button
+  DBG_PRINT("Auto Mix Button Status: ");
+  DBG_PRINTLN(digitalRead(PIN_BUTTON_AUTOMIX));
+
+  // Print status of Joystick
+  DBG_PRINT("Joystick Status: ");
+  DBG_PRINTLN(analogRead(PIN_JOYSTICK));
+
+  // Print status of Mixing Speed Potentiometer
+  DBG_PRINT("Mix Speed Potentiometer Status: ");
+  DBG_PRINTLN(analogRead(PIN_MIX_SPEED_POTENTIOMETER));
+
+  delay(50);
 }
