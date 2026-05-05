@@ -22,7 +22,7 @@
 //// ---- Configuration Parameters for Specific Components ---- ////
 
 // Injection Motor:
-#define INJECTMOTOR_PWMLIMIT 127 // PWM Duty Cycle Speed Limit (between 0-255)
+#define INJECTMOTOR_PWMLIMIT 100 // PWM Duty Cycle Speed Limit (between 0-255)
 
 // Stepper Motor/Linear Stage:
 #define LINEAR_STAGE_MAX_STEPS 1000 // Maximum number of steps the stepper motor can travel

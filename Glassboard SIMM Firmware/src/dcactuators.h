@@ -10,6 +10,8 @@
 #include <stdint.h>
 #include <stdbool.h>
 
+// Function declarations
+
 void disableMotor(int motor);
 
 void driveMotor(int speed, int direction, int motor);

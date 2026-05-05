@@ -50,26 +50,28 @@
 #define PIN_BUTTON_AUTOMIX 13
 
 // Physical Pin 19 - GP14
-#define PIN_LIMIT_SWITCH_LINEAR_STAGE 14
+#define PIN_STEPPER_LIMITSWITCH 14
 
 // Physical Pin 20 - GP15
 
 // Physical Pin 21 - GP16
+#define PIN_RPISERIAL1_RX 16
 
 // Physical Pin 22 - GP17
+#define PIN_RPISERIAL1_TX 17
 
 // Physical Pin 24 - GP18
 
 // Physical Pin 25 - GP19
 
 // Physical Pin 26 - GP20
-#define PIN_STEPPER_EN 20
+#define PIN_STEPPER_STEP 20
 
 // Physical Pin 27 - GP21
 #define PIN_STEPPER_DIR 21
 
 // Physical Pin 29 - GP22
-#define PIN_STEPPER_STEP 22
+#define PIN_STEPPER_EN 22
 
 
 

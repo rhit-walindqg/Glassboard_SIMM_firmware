@@ -38,6 +38,11 @@ int mixDir = 1;
 
 // Define Status Register:
 volatile uint8_t statusRegister = 0;
+volatile uint8_t lastStatusRegister = 0;
+
+// Stepper motor variables:
+volatile int lastKnownStagePosition_mm = 0;
+volatile bool LCDPositionNeedsUpdate = false;
 
 // Function Declarations:
 void checkStatus();
@@ -51,6 +56,9 @@ void printDebugSummary();
 
 
 void setup() {
+  // Open serial port if debugging:
+  DBG_BEGIN;
+
   // Set up Analog-Digital converter correctly
   analogReadResolution(12); // sets range to 0-4095
 
@@ -87,22 +95,35 @@ void setup() {
   pinMode(PIN_BUTTON_AUTOMIX, INPUT_PULLUP);
   pinMode(PIN_BUTTON_AUTOINJECT, INPUT_PULLUP);
 
-  // // Set up pin mode and ISR for interrupt pins
-  // pinMode(PIN_BUTTON_AUTOINJECT, INPUT_PULLUP);
-  // attachInterrupt(digitalPinToInterrupt(PIN_BUTTON_AUTOINJECT), ISR_AutoMix, FALLING);
-  // pinMode(PIN_LIMIT_SWITCH_LINEAR_STAGE, INPUT_PULLUP);
-  // attachInterrupt(digitalPinToInterrupt(PIN_LIMIT_SWITCH_LINEAR_STAGE), ISR_LowerLimitSwitch, FALLING);
+  // Initialize stepper motor
+  stepper_init();
 
   // Clear LCD Screen
   delay(500);
   lcd.clear();
 
-  // Open serial port if debugging:
-  DBG_BEGIN;
+  // // Set up pin mode and ISR for interrupt pins
+  pinMode(PIN_STEPPER_LIMITSWITCH, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(PIN_STEPPER_LIMITSWITCH), ISR_StepperLowerLimit, FALLING);
+  // pinMode(PIN_BUTTON_AUTOINJECT, INPUT_PULLUP);
+  // attachInterrupt(digitalPinToInterrupt(PIN_BUTTON_AUTOINJECT), ISR_AutoMix, FALLING);
+  // pinMode(PIN_LIMIT_SWITCH_LINEAR_STAGE, INPUT_PULLUP);
+  // attachInterrupt(digitalPinToInterrupt(PIN_LIMIT_SWITCH_LINEAR_STAGE), ISR_LowerLimitSwitch, FALLING);
    
+  // Home stepper motor:
+  // stepper_home();
+  // while(stepper_homingStatus()) {stepper_update();} // Wait for the stepper motor to have successfully homed
+
+  lcd.setCursor(0,0);
+  lcd.print("Homed");
+  delay(500);
+
+  updateLCD();
 }
 
 void loop() {
+
+  stepper_update();
   
   ///// Set Status Register Flags /////
 
@@ -113,7 +134,7 @@ void loop() {
     statusRegister &= ~FLAG_MANUAL_INJECTION; // Reset manual injection status flag
   }
   // Check the "Auto Mix" button
-  if(!digitalRead(PIN_BUTTON_AUTOMIX)) {
+  if(!digitalRead(PIN_BUTTON_AUTOMIX) && !digitalRead(PIN_SWITCH_MODESELECT)) {
     statusRegister |= FLAG_MIXING_MOTOR_ENABLED; // Set mixer status flag
   } else {
     statusRegister &= ~FLAG_MIXING_MOTOR_ENABLED; // Reset mixer status flag
@@ -121,11 +142,12 @@ void loop() {
 
   // Check Status Register Flags 
   checkStatus();
-
   
-  updateLCD();
-
-  delay(10);
+  if(statusRegister != lastStatusRegister || LCDPositionNeedsUpdate){
+    updateLCD();
+    lastStatusRegister = statusRegister;
+  }
+  
 
   // DBG_PRINT_SUMMARY;
 }
@@ -164,6 +186,13 @@ void checkStatus() {
 
   if(!(statusRegister & FLAG_INJECTION_MOTOR_ENABLED) && !(statusRegister & FLAG_MIXING_MOTOR_ENABLED)) {
     setCoolingLevel(1);
+  }
+
+  if((stepper_getPosition_mm_rounded() != lastKnownStagePosition_mm) && (statusRegister & FLAG_MANUAL_INJECTION)) {
+    lastKnownStagePosition_mm = stepper_getPosition_mm_rounded();
+    LCDPositionNeedsUpdate = true;
+  } else {
+    LCDPositionNeedsUpdate = false;
   }
 }
 
@@ -228,16 +257,26 @@ void autoMix() {
 void joystickDrivenInjection() {
 
   uint16_t ADCVal = analogRead(PIN_JOYSTICK);
+  if(digitalRead(PIN_BUTTON_AUTOMIX)) {
+    int PWMVal = map(ADCVal, ADC_MIN, ADC_MAX, (-1*INJECTMOTOR_PWMLIMIT), INJECTMOTOR_PWMLIMIT);
+    
+    if(PWMVal > 20){
+      driveMotor(PWMVal, 1, 2);
+    } else if (PWMVal < -20) {
+      driveMotor(abs(PWMVal), 0, 2);
+    } else {
+      disableMotor(2);
+    } 
+  }  else if(!digitalRead(PIN_BUTTON_AUTOMIX)) {
+    int dutyCycle = map(ADCVal, ADC_MIN, ADC_MAX, -stepper_getStepsPerMm() * 10, stepper_getStepsPerMm() * 10);
+    // stepsPerMm * 10 = 10mm/s max jog speed — adjust as needed
 
-  int PWMVal = map(ADCVal, ADC_MIN, ADC_MAX, (-1*INJECTMOTOR_PWMLIMIT), INJECTMOTOR_PWMLIMIT);
-  
-  if(PWMVal > 20){
-    driveMotor(PWMVal, 1, 2);
-  } else if (PWMVal < -20) {
-    driveMotor((-1*PWMVal), 0, 2);
-  } else {
-    disableMotor(2);
-  } 
+    if (abs(dutyCycle) < 200) {   // deadband
+        stepper_set_speed(0);
+    } else {
+        stepper_set_speed(dutyCycle);
+    }
+  }
 }
 
 /*
@@ -249,7 +288,7 @@ void joystickDrivenInjection() {
     none
 */ 
 void updateLCD() {
-
+  lcd.clear();
   // Update with status of injection motor and injection mode
   lcd.setCursor(0,0);
   lcd.print("INJ:");
@@ -270,12 +309,15 @@ void updateLCD() {
   lcd.print("MIX:");
   if(statusRegister & FLAG_MIXING_MOTOR_ENABLED) {
     lcd.print("ON ");
+    lcd.print("-SPD:");
+    lcd.print(mixSpeedSetVal);
+    lcd.print(" ");
   } else {
     lcd.print("OFF");
+    lcd.print("-ZPOS:");
+    lcd.print(stepper_getPosition_mm_rounded());
   }  
-  lcd.print("-SPD:");
-  lcd.print(mixSpeedSetVal);
-  lcd.print(" ");
+  
 }
 
 void printDebugSummary() {
@@ -301,3 +343,4 @@ void printDebugSummary() {
 
   delay(50);
 }
+
