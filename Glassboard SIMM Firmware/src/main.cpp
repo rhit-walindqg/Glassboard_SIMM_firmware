@@ -1,6 +1,8 @@
 #include <Arduino.h>
 #include <Wire.h>
 #include <LiquidCrystal_PCF8574.h>
+#include <Servo.h>
+
 
 /*
   Project: Control panel firmware for Glassboard Prototype Silicone
@@ -44,6 +46,9 @@ volatile uint8_t lastStatusRegister = 0;
 volatile int lastKnownStagePosition_mm = 0;
 volatile bool LCDPositionNeedsUpdate = false;
 
+// Magnetic Locator declaration:
+Servo magneticLocator;
+
 // Function Declarations:
 void checkStatus();
 void setMixSpeed();
@@ -71,6 +76,9 @@ void setup() {
   lcd.setBacklight(1);
   lcd.print("  Initializing....  ");
 
+  // Attach magneticLocator servo object to a pin
+  magneticLocator.attach(PIN_MAGNETMOTOR_PWM);
+
   // Set input/output mode for motor driver pins:
   pinMode(PIN_MIXMOTOR_FWD, OUTPUT);
   pinMode(PIN_MIXMOTOR_BKWD, OUTPUT);
@@ -94,6 +102,8 @@ void setup() {
   pinMode(PIN_SWITCH_MODESELECT, INPUT_PULLUP);
   pinMode(PIN_BUTTON_AUTOMIX, INPUT_PULLUP);
   pinMode(PIN_BUTTON_AUTOINJECT, INPUT_PULLUP);
+  pinMode(PIN_LINEARSTAGECONTROL_BUTTON, INPUT_PULLUP);
+  pinMode(PIN_MAGNETICLOCATORCONTROL_BUTTON, INPUT_PULLUP);
 
   // Initialize stepper motor
   stepper_init();
@@ -111,8 +121,8 @@ void setup() {
   // attachInterrupt(digitalPinToInterrupt(PIN_LIMIT_SWITCH_LINEAR_STAGE), ISR_LowerLimitSwitch, FALLING);
    
   // Home stepper motor:
-  // stepper_home();
-  // while(stepper_homingStatus()) {stepper_update();} // Wait for the stepper motor to have successfully homed
+  stepper_home();
+  while(stepper_homingStatus()) {stepper_update();} // Wait for the stepper motor to have successfully homed
 
   lcd.setCursor(0,0);
   lcd.print("Homed");
@@ -134,7 +144,7 @@ void loop() {
     statusRegister &= ~FLAG_MANUAL_INJECTION; // Reset manual injection status flag
   }
   // Check the "Auto Mix" button
-  if(!digitalRead(PIN_BUTTON_AUTOMIX) && !digitalRead(PIN_SWITCH_MODESELECT)) {
+  if(!digitalRead(PIN_BUTTON_AUTOMIX)) {
     statusRegister |= FLAG_MIXING_MOTOR_ENABLED; // Set mixer status flag
   } else {
     statusRegister &= ~FLAG_MIXING_MOTOR_ENABLED; // Reset mixer status flag
@@ -257,7 +267,7 @@ void autoMix() {
 void joystickDrivenInjection() {
 
   uint16_t ADCVal = analogRead(PIN_JOYSTICK);
-  if(digitalRead(PIN_BUTTON_AUTOMIX)) {
+  if(digitalRead(PIN_LINEARSTAGECONTROL_BUTTON) && digitalRead(PIN_MAGNETICLOCATORCONTROL_BUTTON)) {
     int PWMVal = map(ADCVal, ADC_MIN, ADC_MAX, (-1*INJECTMOTOR_PWMLIMIT), INJECTMOTOR_PWMLIMIT);
     
     if(PWMVal > 20){
@@ -267,15 +277,19 @@ void joystickDrivenInjection() {
     } else {
       disableMotor(2);
     } 
-  }  else if(!digitalRead(PIN_BUTTON_AUTOMIX)) {
+  }  else if(!digitalRead(PIN_LINEARSTAGECONTROL_BUTTON)) {
     int dutyCycle = map(ADCVal, ADC_MIN, ADC_MAX, -stepper_getStepsPerMm() * 10, stepper_getStepsPerMm() * 10);
     // stepsPerMm * 10 = 10mm/s max jog speed — adjust as needed
 
-    if (abs(dutyCycle) < 200) {   // deadband
+    if (abs(dutyCycle) < 350) {   // deadband
         stepper_set_speed(0);
     } else {
         stepper_set_speed(dutyCycle);
     }
+  } else if(!digitalRead(PIN_MAGNETICLOCATORCONTROL_BUTTON)) {
+    int PWMVal = map(ADCVal, ADC_MIN, ADC_MAX, 0, 180);
+    
+    magneticLocator.write(PWMVal);
   }
 }
 

@@ -11,7 +11,7 @@
 #include <stdbool.h>
 
 // Define physical parameters about the linear stage and motor:
-#define LINEAR_STAGE_THROW 240            // throw (in mm)
+#define LINEAR_STAGE_THROW 253            // throw (in mm)
 #define LINEAR_STAGE_LEADSCREW_LEAD 2     // lead (in mm/rev)
 #define LINEAR_STAGE_MOTOR_STEP_ANGLE 1.8 // step angle (in deg/step)
 

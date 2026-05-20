@@ -22,7 +22,7 @@ static volatile bool    moving         = false;
 static uint32_t stepInterval_us = 1000000 / (STEPPER_MAX_SPEED_MM_S * stepsPerMm);
 static uint32_t homingInterval_us = 1000000 / (STEPPER_HOMING_SPEED_MM_S * stepsPerMm);
 
-static int32_t currentPosition = 0;  // in steps from home
+static int32_t currentPosition = 1000;  // in steps from home
 
 static bool continuousMode = false; // different behaviors whether it's being run manually or automatically
 
@@ -69,7 +69,7 @@ void stepper_home() {
     atHome   = false;
     // Drive in negative direction at homing speed
     stepInterval_us = homingInterval_us;
-    stepper_move(-999999, false); // large number — ISR will stop it
+    stepper_move(9999, false); // large number — ISR will stop it
 }
 
 void stepper_stopImmediately() {
@@ -78,14 +78,22 @@ void stepper_stopImmediately() {
 }
 
 void stepper_update() {
-    if (isHoming && limit_switch_triggered) {
+    if (limit_switch_triggered) {
+        limit_switch_triggered = false;
         stepper_stopImmediately();
-        currentPosition = 0;
-        isHoming        = false;
-        atHome          = true;
-        limit_switch_triggered  = false;
-        stepInterval_us = 1000000 / (STEPPER_MAX_SPEED_MM_S * stepsPerMm);
-        continuousMode  = false;
+        
+        if (isHoming) {
+            // Only zero position during a real homing sequence
+            currentPosition = 0;
+            isHoming   = false;
+            atHome     = true;
+            stepInterval_us = 1000000 / (STEPPER_MAX_SPEED_MM_S * stepsPerMm);
+            continuousMode  = false;
+            DBG_PRINTLN("Homed");
+        } else {
+            // Hit limit during normal operation — just stop, don't reset position
+            DBG_PRINTLN("Lower limit hit");
+        }
         return;
     }
 
@@ -151,8 +159,14 @@ void stepper_printDiagnostics() {
 }
 
 void ISR_StepperLowerLimit() {
-  stepper_stopImmediately();
-  currentPosition = 0;
-  limit_switch_triggered = true;
+    static uint32_t lastTriggerTime = 0;
+    uint32_t now = millis();
+    
+    // Ignore triggers within 50ms of the last one
+    if (now - lastTriggerTime < 50) return;
+    lastTriggerTime = now;
+
+    stepper_stopImmediately();
+    limit_switch_triggered = true;
 }
 
