@@ -41,13 +41,13 @@
 // Physical Pin 14 - GP10
 
 // Physical Pin 15 - GP11
-#define PIN_BUTTON_AUTOINJECT 11
+#define PIN_BUTTON_AUTOINJECT 13
 
 // Physical Pin 16 - GP12
 #define PIN_BUTTON_AUTOMIX 12
 
 // Physical Pin 17 - GP13
-#define PIN_SWITCH_MODESELECT 13
+#define PIN_SWITCH_MODESELECT 11
 
 // Physical Pin 19 - GP14
 #define PIN_STEPPER_LIMITSWITCH 14
